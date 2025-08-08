@@ -82,6 +82,18 @@
   <span class="pillchip">Shapes: T=tokens, d=dim, V=vocab, H=heads, E=experts, d<sub>ff</sub></span>
 </div>
 
+		<div style="font-size:12px;color:var(--muted);margin:0 auto;padding:0 24px;">
+    Shape guide: embeddings/LayerNorm keep ℝ^{T×d}. Attention outputs ℝ^{T×d}; KV Cache stores K,V∈ℝ^{T×H×dₖ}.
+    MoE uses E experts with Top-k (1–2). Expert MLP is d → d<sub>ff</sub> (≈4d) → d. LM head maps d → logits ℝ^{V}.
+  </div>
+
+<div class="controls">
+  <label for="zoom">Zoom</label>
+  <input id="zoom" type="range" min="80" max="160" value="100">
+  <span id="zv" style="font-size:12px;color:var(--muted)">100%</span>
+  <span style="margin-left:auto;font-size:12px;color:var(--muted)">Tip: resize window or move slider to reflow arrows</span>
+</div>
+
 <div class="wrap">
   <div class="flow" id="flow" style="transform: scale(1); transform-origin: 0px 0px 0px;">
     <svg class="wires" id="wires" aria-hidden="true"><path d="M300,60 C 340,60 296,60.5 336,60.5" class="wire" marker-end="url(#arrow)"></path><path d="M596,60.5 C 636,60.5 592,60 632,60" class="wire" marker-end="url(#arrow)"></path><path d="M892,60 C 932,60 888,60 928,60" class="wire" marker-end="url(#arrow)"></path><path d="M1188,60 C 1228,60 1184,60 1224,60" class="wire" marker-end="url(#arrow)"></path><path d="M1484,60 C 1524,60 1480,60 1520,60" class="wire" marker-end="url(#arrow)"></path><path d="M1780,60 C 1946,60 1946,60 2112,60" class="wire" marker-end="url(#arrow)"></path><path d="M2372,60 C 2412,60 2368,60 2408,60" class="wire" marker-end="url(#arrow)"></path><path d="M2668,60 C 2708,60 2664,60 2704,60" class="wire" marker-end="url(#arrow)"></path><path d="M2964,60 C 3004,60 2960,60 3000,60" class="wire" marker-end="url(#arrow)"></path><path d="M3260,60 C 3300,60 3256,60 3296,60" class="wire" marker-end="url(#arrow)"></path><path d="M3556,60 C 3596,60 3552,60 3592,60" class="wire" marker-end="url(#arrow)"></path><path d="M3852,60 C 3892,60 3848,60 3888,60" class="wire" marker-end="url(#arrow)"></path><path d="M1780,60 C 1820,60 1776,60 1816,60" class="wire cache" marker-end="url(#arrow)"></path><path d="M1982,60 C 2022,60 1480,60 1520,60" class="wire cache" marker-end="url(#arrow)"></path><path d="M4148,78 C 4268,-36 192,-36 312,44" class="wire" marker-end="url(#arrow)"></path></svg>
@@ -316,18 +328,8 @@
 </div>
 </div>
 
-<div class="controls">
-  <label for="zoom">Zoom</label>
-  <input id="zoom" type="range" min="80" max="160" value="100">
-  <span id="zv" style="font-size:12px;color:var(--muted)">100%</span>
-  <span style="margin-left:auto;font-size:12px;color:var(--muted)">Tip: resize window or move slider to reflow arrows</span>
-</div>
 
 <div class="controls" style="border-top:0">
-  <div style="font-size:12px;color:var(--muted)">
-    Shape guide: embeddings/LayerNorm keep ℝ^{T×d}. Attention outputs ℝ^{T×d}; KV Cache stores K,V∈ℝ^{T×H×dₖ}.
-    MoE uses E experts with Top-k (1–2). Expert MLP is d → d<sub>ff</sub> (≈4d) → d. LM head maps d → logits ℝ^{V}.
-  </div>
 </div>
 
 <div class="tip" id="tip" style="left: 1379px; top: 230px; opacity: 0;">Normalize per token; pre-LN architecture.</div>
