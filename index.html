@@ -41,7 +41,12 @@
   .outpill{position:absolute;left:50%;transform:translateX(-50%);bottom:-20px;background:#ecfeff;border:1px solid #bae6fd;
     color:#0c4a6e;border-radius:999px;font-size:11px;padding:4px 10px;white-space:nowrap}
   /* Wires overlay */
-  svg.wires{position:absolute;inset:0;pointer-events:none}
+  /* Canvas-integrated panels and images */
+  .band, .panels{position:relative; z-index:1}
+  .flow .panels{margin-top:24px}
+  .panel figure{margin:8px 16px 16px}
+  .panel img{width:100%; height:auto; display:block; border:1px solid var(--line); border-radius:8px}
+  svg.wires{position:absolute;inset:0;pointer-events:none;z-index:0}
   .wire{stroke:var(--flow);stroke-width:2.5;fill:none;marker-end:url(#arrow)}
   .wire.cache{stroke:var(--warn)}
   /* Bottom panels */
@@ -181,8 +186,8 @@
         <div class="outpill">Output: next id ∈ ℕ</div>
       </div>
     </div>
-  </div>
-</div>
+  
+
 
 <div class="panels">
   <!-- Attention internals -->
@@ -231,6 +236,10 @@
         <text x="1420" y="60" font-size="12" fill="#475569">→ Residual +</text>
       </g>
     </svg>
+    <figure>
+      <img src="Attention_diagram.png" alt="Self-attention diagram PNG">
+      <figcaption class="hint">Reference diagram.</figcaption>
+    </figure>
   </div>
 
   <!-- MoE vertical expert + router -->
@@ -298,7 +307,13 @@
       <path d="M540 190 C 620 190, 630 80, 720 80" class="wire"></path>
 
     </svg>
+    <figure>
+      <img src="MoE_FF.svg" alt="MoE feed-forward diagram SVG">
+      <figcaption class="hint">Reference diagram.</figcaption>
+    </figure>
   </div>
+</div>
+</div>
 </div>
 
 <div class="controls">
