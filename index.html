@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MoE Transformer — End-to-End Flow (Refactor)</title>
+<style>
+  :root{
+    --bg:#f6f7fb; --panel:#fff; --text:#0f172a; --muted:#475569; --line:#e5e7eb;
+    --grid:rgba(17,24,39,0.06);
+    --flow:#0284c7; --attn:#93c5fd; --moe:#c4b5fd; --ln:#86efac; --cache:#fcd34d;
+    --pill:#eef2ff; --good:#10b981; --warn:#b45309;
+  }
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--text);
+    font-family: ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}
+  header{padding:16px 24px;border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,rgba(2,6,23,.03),transparent);}
+  h1{margin:0;font-size:18px}
+  .sub{margin-top:6px;color:var(--muted);font-size:13px}
+  .legend{padding:10px 24px;color:var(--muted);font-size:12px;display:flex;flex-wrap:wrap;gap:8px}
+  .pillchip{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--line);
+    border-radius:999px;background:var(--pill);color:var(--text)}
+  .sw{width:12px;height:12px;border-radius:2px;display:inline-block}
+  /* Flow viewport */
+  .wrap{position:relative;height:64vh;min-height:520px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+    overflow:auto;background:
+      linear-gradient(90deg,var(--grid) 1px,transparent 1px) 0 0/40px 40px,
+      linear-gradient(var(--grid) 1px,transparent 1px) 0 0/40px 40px,
+      var(--panel);}
+  .flow{position:relative;min-width:1200px;padding:32px 40px 80px}
+  .band{position:relative;display:grid;grid-auto-flow:column;grid-auto-columns:260px;column-gap:36px;align-items:start}
+  .node{position:relative;background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px;box-shadow:0 2px 8px rgba(0,0,0,.04)}
+  .node.small{width:140px}
+  .title{font-size:13px;font-weight:700;text-align:center}
+  .meta{font-size:11px;color:var(--muted);text-align:center;margin-top:4px;white-space:nowrap}
+  .badge{position:absolute;top:-10px;left:12px;font-size:11px;padding:3px 8px;border-radius:999px;border:1px solid var(--line);background:#fff;color:var(--muted)}
+  .badge.attn{background:#eff6ff;border-color:#bfdbfe}
+  .badge.moe{background:#f5f3ff;border-color:#ddd6fe}
+  .badge.ln{background:#ecfdf5;border-color:#bbf7d0}
+  .badge.cache{background:#fffbeb;border-color:#fde68a}
+  .outpill{position:absolute;left:50%;transform:translateX(-50%);bottom:-20px;background:#ecfeff;border:1px solid #bae6fd;
+    color:#0c4a6e;border-radius:999px;font-size:11px;padding:4px 10px;white-space:nowrap}
+  /* Wires overlay */
+  svg.wires{position:absolute;inset:0;pointer-events:none}
+  .wire{stroke:var(--flow);stroke-width:2.5;fill:none;marker-end:url(#arrow)}
+  .wire.cache{stroke:var(--warn)}
+  /* Bottom panels */
+  .panels{display:grid;grid-template-columns:1fr 1fr;gap:0;border-top:1px solid var(--line)}
+  .panel{background:#fff;border-right:1px solid var(--line)}
+  .panel:last-child{border-right:0}
+  .panel h2{margin:10px 16px 0;font-size:14px;color:#0369a1}
+  .panel .hint{margin:4px 16px 8px;color:var(--muted);font-size:12px}
+  .panel svg{width:100%;height:210px;display:block}
+  .kv{background:#fffbeb;border:1px solid #fde68a}
+  /* Tooltips */
+  .tip{position:fixed;pointer-events:none;z-index:10;background:#111827;color:#e5e7eb;padding:8px 10px;font-size:12px;border:1px solid #1f2937;border-radius:6px;
+    box-shadow:0 10px 20px rgba(0,0,0,.25);opacity:0;transform:translate(-50%,-140%);transition:opacity .06s ease;white-space:nowrap}
+  /* Controls */
+  .controls{display:flex;align-items:center;gap:12px;padding:10px 24px;background:#f8fafc;border-top:1px solid var(--line)}
+  .controls label{font-size:12px;color:var(--muted)}
+  input[type="range"]{width:220px}
+  @media (max-width:1100px){ .panels{grid-template-columns:1fr} }
+</style>
+</head>
+	<body>
+<header>
+  <h1>Mixture-of-Experts (MoE) Transformer — token → token</h1>
+  <div class="sub">Horizontal flow. Each card shows its <b>output</b>. Arrows auto-align. Panels expand Attention and MoE internals.</div>
+</header>
+
+<div class="legend">
+  <span class="pillchip"><i class="sw" style="background:var(--flow)"></i>Data flow</span>
+  <span class="pillchip"><i class="sw" style="background:var(--attn)"></i>Attention</span>
+  <span class="pillchip"><i class="sw" style="background:var(--moe)"></i>MoE</span>
+  <span class="pillchip"><i class="sw" style="background:var(--ln)"></i>LayerNorm</span>
+  <span class="pillchip"><i class="sw" style="background:var(--cache)"></i>KV Cache I/O</span>
+  <span class="pillchip">Shapes: T=tokens, d=dim, V=vocab, H=heads, E=experts, d<sub>ff</sub></span>
+</div>
+
+<div class="wrap">
+  <div class="flow" id="flow" style="transform: scale(1); transform-origin: 0px 0px 0px;">
+    <svg class="wires" id="wires" aria-hidden="true"><path d="M300,60 C 340,60 296,60.5 336,60.5" class="wire" marker-end="url(#arrow)"></path><path d="M596,60.5 C 636,60.5 592,60 632,60" class="wire" marker-end="url(#arrow)"></path><path d="M892,60 C 932,60 888,60 928,60" class="wire" marker-end="url(#arrow)"></path><path d="M1188,60 C 1228,60 1184,60 1224,60" class="wire" marker-end="url(#arrow)"></path><path d="M1484,60 C 1524,60 1480,60 1520,60" class="wire" marker-end="url(#arrow)"></path><path d="M1780,60 C 1946,60 1946,60 2112,60" class="wire" marker-end="url(#arrow)"></path><path d="M2372,60 C 2412,60 2368,60 2408,60" class="wire" marker-end="url(#arrow)"></path><path d="M2668,60 C 2708,60 2664,60 2704,60" class="wire" marker-end="url(#arrow)"></path><path d="M2964,60 C 3004,60 2960,60 3000,60" class="wire" marker-end="url(#arrow)"></path><path d="M3260,60 C 3300,60 3256,60 3296,60" class="wire" marker-end="url(#arrow)"></path><path d="M3556,60 C 3596,60 3552,60 3592,60" class="wire" marker-end="url(#arrow)"></path><path d="M3852,60 C 3892,60 3848,60 3888,60" class="wire" marker-end="url(#arrow)"></path><path d="M1780,60 C 1820,60 1776,60 1816,60" class="wire cache" marker-end="url(#arrow)"></path><path d="M1982,60 C 2022,60 1480,60 1520,60" class="wire cache" marker-end="url(#arrow)"></path><path d="M4148,78 C 4268,-36 192,-36 312,44" class="wire" marker-end="url(#arrow)"></path></svg>
+
+    <!-- Row: main blocks -->
+    <div class="band" id="row">
+      <div class="node" id="n0" data-tip="Raw prompt or prior tokens.">
+        <span class="badge">Input</span>
+        <div class="title">Prompt (text)</div>
+        <div class="meta">string</div>
+        <div class="outpill">Output: text</div>
+      </div>
+
+      <div class="node" id="n1" data-tip="Subword segmentation to IDs (BPE/Unigram).">
+        <span class="badge">Tokenizer</span>
+        <div class="title">Tokenizer → IDs</div>
+        <div class="meta">[id₁,…,id_T]</div>
+        <div class="outpill">Output: list[int] (T)</div>
+      </div>
+
+      <div class="node" id="n2" data-tip="Look up dense vectors for token IDs; often tied with LM head.">
+        <span class="badge">Embedding</span>
+        <div class="title">Embedding Matrix</div>
+        <div class="meta">E∈ℝ^{V×d}; X=E[ids]</div>
+        <div class="outpill">Output: X ∈ ℝ^{T×d}</div>
+      </div>
+
+      <div class="node" id="n3" data-tip="Inject position info (RoPE/ALiBi).">
+        <span class="badge">Positional</span>
+        <div class="title">Positional Encoding</div>
+        <div class="meta">RoPE / ALiBi</div>
+        <div class="outpill">Output: Xᵖ ∈ ℝ^{T×d}</div>
+      </div>
+
+      <div class="node" id="n4" data-tip="Normalize per token; pre-LN architecture.">
+        <span class="badge ln">LayerNorm</span>
+        <div class="title">LayerNorm</div>
+        <div class="meta">pre-attn</div>
+        <div class="outpill">Output: ℝ^{T×d}</div>
+      </div>
+
+      <div class="node" id="n5" data-tip="Q,K,V projections → scaled dot-product → concat heads → linear.">
+        <span class="badge attn">Attention</span>
+        <div class="title">Multi-Head Self-Attention</div>
+        <div class="meta">H heads, dₖ=d/H</div>
+        <div class="outpill">Output: Attn(X) ∈ ℝ^{T×d}</div>
+      </div>
+
+      <div class="node small kv" id="n5a" data-tip="Reuse past K/V during decoding.">
+        <span class="badge cache">KV Cache</span>
+        <div class="title">KV Cache</div>
+        <div class="meta">K,V ∈ ℝ^{T×H×dₖ}</div>
+        <div class="outpill">I/O: append/read</div>
+      </div>
+
+      <div class="node" id="n6" data-tip="Add attention result to residual stream.">
+        <span class="badge">Residual</span>
+        <div class="title">Residual Add</div>
+        <div class="meta">x + Attn(x)</div>
+        <div class="outpill">Output: ℝ^{T×d}</div>
+      </div>
+
+      <div class="node" id="n7" data-tip="Normalize before feed-forward / MoE.">
+        <span class="badge ln">LayerNorm</span>
+        <div class="title">LayerNorm</div>
+        <div class="meta">pre-MoE</div>
+        <div class="outpill">Output: ℝ^{T×d}</div>
+      </div>
+
+      <div class="node" id="n8" data-tip="Router picks Top-k experts per token; dispatch; experts run; combine.">
+        <span class="badge moe">MoE</span>
+        <div class="title">MoE Feed-Forward</div>
+        <div class="meta">Top-k, capacity, combine</div>
+        <div class="outpill">Output: MoE(X) ∈ ℝ^{T×d}; G ∈ ℝ^{T×E}</div>
+      </div>
+
+      <div class="node" id="n9" data-tip="Add MoE result to residual stream.">
+        <span class="badge">Residual</span>
+        <div class="title">Residual Add</div>
+        <div class="meta">… + MoE(x)</div>
+        <div class="outpill">Output: ℝ^{T×d}</div>
+      </div>
+
+      <div class="node" id="n10" data-tip="Normalize before projecting to logits.">
+        <span class="badge ln">LayerNorm</span>
+        <div class="title">Final LayerNorm</div>
+        <div class="meta">pre-LM head</div>
+        <div class="outpill">Output: ℝ^{T×d}</div>
+      </div>
+
+      <div class="node" id="n11" data-tip="Linear projection to vocab; often weight-tied with embedding E.">
+        <span class="badge">LM Head</span>
+        <div class="title">LM Head</div>
+        <div class="meta">xWᵀ, W∈ℝ^{V×d}</div>
+        <div class="outpill">Output: logits ∈ ℝ^{V}</div>
+      </div>
+
+      <div class="node" id="n12" data-tip="Softmax to probabilities; sample next id (greedy/top-p).">
+        <span class="badge">Decode</span>
+        <div class="title">Softmax + Sampling</div>
+        <div class="meta">p ∈ ℝ^{V} → id</div>
+        <div class="outpill">Output: next id ∈ ℕ</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="panels">
+  <!-- Attention internals -->
+  <div class="panel">
+    <h2>Multi-Head Self-Attention — expanded</h2>
+    <div class="hint">Outputs under each block. Shapes carry the head dimension.</div>
+    <svg viewBox="0 0 1500 210" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Attention internals">
+      <defs>
+        <marker id="arrowA" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="10" markerHeight="10" orient="auto">
+          <path d="M2,2 L10,6 L2,10 Z" fill="#0284c7"></path>
+        </marker>
+      </defs>
+      <g transform="translate(20,48)">
+        <rect x="0" y="0" width="210" height="110" rx="8" ry="8" fill="#eff6ff" stroke="#bfdbfe"></rect>
+        <text x="105" y="30" text-anchor="middle" font-size="13">Linear: Q,K,V</text>
+        <text x="105" y="54" text-anchor="middle" font-size="11" fill="#475569">Q,K,V ∈ ℝ^{T×H×dₖ}</text>
+        <rect x="35" y="118" width="140" height="22" rx="10" ry="10" fill="#ecfeff" stroke="#bae6fd"></rect>
+        <text x="105" y="133" text-anchor="middle" font-size="11" fill="#0c4a6e">Output: Q,K,V</text>
+
+        <line x1="210" y1="55" x2="270" y2="55" stroke="#0284c7" stroke-width="2" marker-end="url(#arrowA)"></line>
+
+        <rect x="270" y="0" width="170" height="110" rx="8" ry="8" fill="#eff6ff" stroke="#bfdbfe"></rect>
+        <text x="355" y="62" text-anchor="middle" font-size="12">Split H heads</text>
+
+        <line x1="440" y1="55" x2="520" y2="55" stroke="#0284c7" stroke-width="2" marker-end="url(#arrowA)"></line>
+
+        <rect x="520" y="0" width="260" height="110" rx="8" ry="8" fill="#eff6ff" stroke="#bfdbfe"></rect>
+        <text x="650" y="30" text-anchor="middle" font-size="12">QKᵀ/√dₖ → softmax</text>
+        <text x="650" y="54" text-anchor="middle" font-size="11" fill="#475569">A ∈ ℝ^{T×T×H}</text>
+        <rect x="585" y="118" width="130" height="22" rx="10" ry="10" fill="#ecfeff" stroke="#bae6fd"></rect>
+        <text x="650" y="133" text-anchor="middle" font-size="11" fill="#0c4a6e">Output: A</text>
+
+        <line x1="780" y1="55" x2="860" y2="55" stroke="#0284c7" stroke-width="2" marker-end="url(#arrowA)"></line>
+
+        <rect x="860" y="0" width="220" height="110" rx="8" ry="8" fill="#eff6ff" stroke="#bfdbfe"></rect>
+        <text x="970" y="62" text-anchor="middle" font-size="12">A · V ∈ ℝ^{T×H×dₖ}</text>
+
+        <line x1="1080" y1="55" x2="1160" y2="55" stroke="#0284c7" stroke-width="2" marker-end="url(#arrowA)"></line>
+
+        <rect x="1160" y="0" width="240" height="110" rx="8" ry="8" fill="#eff6ff" stroke="#bfdbfe"></rect>
+        <text x="1280" y="30" text-anchor="middle" font-size="12">Concat heads → Wᵒ</text>
+        <text x="1280" y="54" text-anchor="middle" font-size="11" fill="#475569">ℝ^{T×d}</text>
+        <rect x="1200" y="118" width="160" height="22" rx="10" ry="10" fill="#ecfeff" stroke="#bae6fd"></rect>
+        <text x="1280" y="133" text-anchor="middle" font-size="11" fill="#0c4a6e">Output: ℝ^{T×d}</text>
+
+        <text x="1420" y="60" font-size="12" fill="#475569">→ Residual +</text>
+      </g>
+    </svg>
+  </div>
+
+  <!-- MoE vertical expert + router -->
+  <div class="panel">
+    <h2>MoE Feed-Forward — vertical path</h2>
+    <div class="hint">Router → Top-k → Capacity/Dispatch → Expert MLP (d → d<sub>ff</sub> → d) → Combine.</div>
+    <svg viewBox="0 0 1500 210" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="MoE internals">
+      <defs>
+        <marker id="arrowM" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="10" markerHeight="10" orient="auto">
+          <path d="M2,2 L10,6 L2,10 Z" fill="#0284c7"></path>
+        </marker>
+      </defs>
+
+      <!-- Left column: router -->
+      <g transform="translate(60,16)">
+        <rect x="0" y="0" width="220" height="48" rx="8" ry="8" fill="#f5f3ff" stroke="#ddd6fe"></rect>
+        <text x="110" y="30" text-anchor="middle" font-size="13">Router: softmax(Wg·x)</text>
+        <rect x="38" y="54" width="144" height="22" rx="10" ry="10" fill="#ecfeff" stroke="#bae6fd"></rect>
+        <text x="110" y="69" text-anchor="middle" font-size="11" fill="#0c4a6e">Output: G ∈ ℝ^{T×E}</text>
+
+        <line x1="110" y1="88" x2="110" y2="114" class="wire" marker-end="url(#arrowM)" stroke="#0284c7"></line>
+
+        <rect x="20" y="114" width="180" height="48" rx="8" ry="8" fill="#f5f3ff" stroke="#ddd6fe"></rect>
+        <text x="110" y="142" text-anchor="middle" font-size="12">Top-k + Capacity</text>
+        <rect x="48" y="164" width="124" height="22" rx="10" ry="10" fill="#ecfeff" stroke="#bae6fd"></rect>
+        <text x="110" y="179" text-anchor="middle" font-size="11" fill="#0c4a6e">Output: indices/buckets</text>
+      </g>
+
+      <!-- Middle column: expert MLP vertical -->
+      <g transform="translate(380,10)">
+        <text x="110" y="16" text-anchor="middle" font-size="12" fill="#475569">Expert i — MLP</text>
+        <!-- d -->
+        <rect x="50" y="28" width="120" height="30" rx="6" ry="6" fill="#fff" stroke="#e5e7eb"></rect>
+        <text x="110" y="48" text-anchor="middle" font-size="11">Input x ∈ ℝ^{d}</text>
+        <line x1="110" y1="60" x2="110" y2="76" stroke="#0284c7" stroke-width="2" marker-end="url(#arrowM)"></line>
+        <!-- expand -->
+        <rect x="30" y="76" width="160" height="34" rx="6" ry="6" fill="#fff" stroke="#e5e7eb"></rect>
+        <text x="110" y="97" text-anchor="middle" font-size="11">W₁: d → d<tspan baseline-shift="sub">ff</tspan></text>
+        <line x1="110" y1="110" x2="110" y2="126" stroke="#0284c7" stroke-width="2" marker-end="url(#arrowM)"></line>
+        <!-- act -->
+        <rect x="50" y="126" width="120" height="26" rx="6" ry="6" fill="#fff" stroke="#e5e7eb"></rect>
+        <text x="110" y="143" text-anchor="middle" font-size="11">SwiGLU / GELU</text>
+        <line x1="110" y1="152" x2="110" y2="170" stroke="#0284c7" stroke-width="2" marker-end="url(#arrowM)"></line>
+        <!-- project -->
+        <rect x="30" y="170" width="160" height="34" rx="6" ry="6" fill="#fff" stroke="#e5e7eb"></rect>
+        <text x="110" y="191" text-anchor="middle" font-size="11">W₂: d<tspan baseline-shift="sub">ff</tspan> → d</text>
+      </g>
+
+      <!-- Right column: combine -->
+      <g transform="translate(720,16)">
+        <rect x="0" y="0" width="220" height="48" rx="8" ry="8" fill="#f5f3ff" stroke="#ddd6fe"></rect>
+        <text x="110" y="30" text-anchor="middle" font-size="13">All-to-All + Combine</text>
+        <rect x="38" y="54" width="144" height="22" rx="10" ry="10" fill="#ecfeff" stroke="#bae6fd"></rect>
+        <text x="110" y="69" text-anchor="middle" font-size="11" fill="#0c4a6e">Output: ℝ^{T×d}</text>
+
+        <text x="110" y="106" text-anchor="middle" font-size="11" fill="#475569">weighted by G</text>
+        <!-- gating dots -->
+        <g transform="translate(70,116)">
+          <circle r="4" cx="-20" cy="0" fill="#7c3aed"></circle><circle r="4" cx="0" cy="0" fill="#7c3aed"></circle><circle r="4" cx="20" cy="0" fill="#7c3aed"></circle>
+        </g>
+      </g>
+
+      <!-- horizontal arrows between columns -->
+      <path d="M300 140 C 360 140, 340 60, 380 60" class="wire"></path>
+      <path d="M540 190 C 620 190, 630 80, 720 80" class="wire"></path>
+
+    </svg>
+  </div>
+</div>
+
+<div class="controls">
+  <label for="zoom">Zoom</label>
+  <input id="zoom" type="range" min="80" max="160" value="100">
+  <span id="zv" style="font-size:12px;color:var(--muted)">100%</span>
+  <span style="margin-left:auto;font-size:12px;color:var(--muted)">Tip: resize window or move slider to reflow arrows</span>
+</div>
+
+<div class="controls" style="border-top:0">
+  <div style="font-size:12px;color:var(--muted)">
+    Shape guide: embeddings/LayerNorm keep ℝ^{T×d}. Attention outputs ℝ^{T×d}; KV Cache stores K,V∈ℝ^{T×H×dₖ}.
+    MoE uses E experts with Top-k (1–2). Expert MLP is d → d<sub>ff</sub> (≈4d) → d. LM head maps d → logits ℝ^{V}.
+  </div>
+</div>
+
+<div class="tip" id="tip" style="left: 1379px; top: 230px; opacity: 0;">Normalize per token; pre-LN architecture.</div>
+
+<script>
+  // Auto–wires between nodes, plus cache side wires. Robust to zoom and wrapping.
+  const row = document.getElementById('row');
+  const wires = document.getElementById('wires');
+  const zoom = document.getElementById('zoom');
+  const zv = document.getElementById('zv');
+  const tip = document.getElementById('tip');
+
+  // Tooltip
+  for (const n of document.querySelectorAll('.node')){
+    const t = n.getAttribute('data-tip');
+    if(!t) continue;
+    n.addEventListener('mousemove', e => { tip.textContent = t; tip.style.left = e.clientX+'px'; tip.style.top = e.clientY+'px'; tip.style.opacity = 1; });
+    n.addEventListener('mouseleave', () => tip.style.opacity = 0);
+  }
+
+  function clearWires(){ while(wires.lastChild && wires.lastChild.tagName !== 'DEFS') wires.removeChild(wires.lastChild); }
+
+  function p(x,y){ return x+','+y; }
+
+  function addWire(fromEl, toEl, klass='wire'){
+    const fr = fromEl.getBoundingClientRect();
+    const to = toEl.getBoundingClientRect();
+    const base = wires.getBoundingClientRect();
+
+    const x1 = fr.right - base.left;
+    const y1 = fr.top + fr.height/2 - base.top;
+    const x4 = to.left - base.left;
+    const y4 = to.top + to.height/2 - base.top;
+
+    const dx = Math.max(40, (x4 - x1)/2);
+    const x2 = x1 + dx, y2 = y1;
+    const x3 = x4 - dx, y3 = y4;
+
+    const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('d', `M${p(x1,y1)} C ${p(x2,y2)} ${p(x3,y3)} ${p(x4,y4)}`);
+    path.setAttribute('class', klass);
+    path.setAttribute('marker-end','url(#arrow)');
+    wires.appendChild(path);
+  }
+
+  function addLoop(fromEl, toEl){
+    // loop back from decode to tokenizer input line (append id)
+    const fr = fromEl.getBoundingClientRect();
+    const to = toEl.getBoundingClientRect();
+    const base = wires.getBoundingClientRect();
+
+    const x1 = fr.right - base.left;
+    const y1 = fr.bottom - 10 - base.top;
+    const x4 = to.left - 24 - base.left;
+    const y4 = to.top + 12 - base.top;
+
+    const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+    const midY = Math.min(y1, y4) - 80;
+    path.setAttribute('d', `M${p(x1,y1)} C ${p(x1+120,midY)} ${p(x4-120,midY)} ${p(x4,y4)}`);
+    path.setAttribute('class', 'wire');
+    path.setAttribute('marker-end','url(#arrow)');
+    wires.appendChild(path);
+  }
+
+  function draw(){
+    clearWires();
+    const ids = ['n0','n1','n2','n3','n4','n5','n6','n7','n8','n9','n10','n11','n12'];
+    for(let i=0;i<ids.length-1;i++){
+      addWire(document.getElementById(ids[i]), document.getElementById(ids[i+1]));
+    }
+    // KV cache side taps near Attention
+    const attn = document.getElementById('n5');
+    const kv   = document.getElementById('n5a');
+    addWire(attn, kv, 'wire cache');
+    addWire(kv, attn, 'wire cache');
+    // decoding loop: next id → tokenizer
+    addLoop(document.getElementById('n12'), document.getElementById('n1'));
+  }
+
+  // Zoom
+  function setZoom(v){
+    document.querySelector('.flow').style.transform = `scale(${v/100})`;
+    document.querySelector('.flow').style.transformOrigin = '0 0';
+    zv.textContent = v + '%';
+    // wait a frame for layout then redraw
+    requestAnimationFrame(draw);
+  }
+  zoom.addEventListener('input', e => setZoom(parseInt(e.target.value,10)));
+
+  const ro = new ResizeObserver(()=>draw());
+  ro.observe(document.querySelector('.flow'));
+  window.addEventListener('load', ()=>{ setZoom(parseInt(zoom.value,10)); });
+
+</script>
+
+
+</body>
+</html>
