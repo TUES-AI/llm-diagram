@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MoE Transformer — Flow with Pointers (v3)</title>
+<style>
+  :root{
+    --bg:#f6f7fb; --panel:#fff; --text:#0f172a; --muted:#475569; --line:#e5e7eb;
+    --grid:rgba(17,24,39,0.06);
+    --flow:#0284c7; --attn:#93c5fd; --moe:#c4b5fd; --ln:#86efac; --cache:#f59e0b;
+    --pill:#eef2ff;
+  }
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--text);
+    font-family: ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}
+  header{padding:16px 24px;border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg,rgba(2,6,23,.03),transparent);}
+  h1{margin:0;font-size:18px}
+  .sub{margin-top:6px;color:var(--muted);font-size:13px}
+  .legend{padding:10px 24px;color:var(--muted);font-size:12px;display:flex;flex-wrap:wrap;gap:8px}
+  .pillchip{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--line);
+    border-radius:999px;background:var(--pill);color:var(--text)}
+  .sw{width:12px;height:12px;border-radius:2px;display:inline-block}
+  /* Flow viewport */
+  .wrap{position:relative;border-top:1px solid var(--line);
+    overflow:visible;background:
+      linear-gradient(90deg,var(--grid) 1px,transparent 1px) 0 0/40px 40px,
+      linear-gradient(var(--grid) 1px,transparent 1px) 0 0/40px 40px,
+      var(--panel);}
+  .flow{position:relative;min-width:1000px;padding:32px 40px 80px}
+  .band{position:relative;display:grid;grid-auto-flow:column;grid-auto-columns:260px;column-gap:36px;align-items:start}
+  .band.bottom{margin-top:80px}
+  .node{position:relative;background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 12px;box-shadow:0 2px 8px rgba(0,0,0,.04)}
+  .node.small{width:140px}
+  .title{font-size:13px;font-weight:700;text-align:center}
+  .meta{font-size:11px;color:var(--muted);text-align:center;margin-top:4px;white-space:nowrap}
+  .badge{position:absolute;top:-10px;left:12px;font-size:11px;padding:3px 8px;border-radius:999px;border:1px solid var(--line);background:#fff;color:var(--muted)}
+  .badge.attn{background:#eff6ff;border-color:#bfdbfe}
+  .badge.moe{background:#f5f3ff;border-color:#ddd6fe}
+  .badge.ln{background:#ecfdf5;border-color:#bbf7d0}
+  .badge.cache{background:#fffbeb;border-color:#fde68a}
+  .outpill{position:absolute;left:50%;transform:translateX(-50%);bottom:-20px;background:#ecfeff;border:1px solid #bae6fd;
+    color:#0c4a6e;border-radius:999px;font-size:11px;padding:4px 10px;white-space:nowrap}
+  /* Panels */
+  .band, .panels{position:relative; z-index:1}
+  .flow .panels{margin-top:24px}
+  .panel img{width:100%; height:auto; display:block; border:1px solid var(--line); border-radius:8px}
+  .panels{display:grid;grid-template-columns:1fr 1fr;gap:0;border-top:1px solid var(--line)}
+  .panel{background:#fff;border-right:1px solid var(--line)}
+  .panel:last-child{border-right:0}
+  .panel h2{margin:10px 16px 0;font-size:14px;color:#0369a1}
+  .panel .hint{margin:4px 16px 8px;color:var(--muted);font-size:12px}
+  .panel svg{width:100%;height:210px;display:block}
+  /* Pointer arrows */
+  .ptr{position:absolute;width:16px;height:16px;left:0;top:0;transform:translate(-50%,-50%);z-index:2;filter:drop-shadow(0 1px 0 rgba(255,255,255,.9))}
+  .ptr polygon{fill:var(--flow);stroke:#ffffff;stroke-width:1}
+  .ptr.cache polygon{fill:var(--cache)}
+  /* Tooltips */
+  .tip{position:fixed;pointer-events:none;z-index:10;background:#111827;color:#e5e7eb;padding:8px 10px;font-size:12px;border:1px solid #1f2937;border-radius:6px;
+    box-shadow:0 10px 20px rgba(0,0,0,.25);opacity:0;transform:translate(-50%,-140%);transition:opacity .06s ease;white-space:nowrap}
+  /* Controls */
+  .controls{display:flex;align-items:center;gap:12px;padding:10px 24px;background:#f8fafc;border-top:1px solid var(--line)}
+  .controls label{font-size:12px;color:var(--muted)}
+  input[type="range"]{width:220px}
+  @media (max-width:1100px){ .panels{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+<header>
+  <h1>Mixture-of-Experts (MoE) Transformer — token → token</h1>
+  <div class="sub">Flow uses compact pointer arrows between blocks. Top row ends at Attention + KV Cache. Bottom row begins under Attention and goes left to Decode.</div>
+</header>
+
+<div class="legend">
+  <span class="pillchip"><i class="sw" style="background:var(--flow)"></i>Pointer arrows</span>
+  <span class="pillchip"><i class="sw" style="background:var(--attn)"></i>Attention</span>
+  <span class="pillchip"><i class="sw" style="background:var(--moe)"></i>MoE</span>
+  <span class="pillchip"><i class="sw" style="background:var(--ln)"></i>LayerNorm</span>
+  <span class="pillchip"><i class="sw" style="background:var(--cache)"></i>KV Cache</span>
+</div>
+
+<div class="controls">
+  <label for="zoom">Zoom</label>
+  <input id="zoom" type="range" min="80" max="160" value="100">
+  <span id="zv" style="font-size:12px;color:var(--muted)">100%</span>
+</div>
+
+<div class="wrap">
+  <div class="flow" id="flow">
+    <!-- Row 1: up to Attention + KV -->
+    <div class="band" id="rowTop">
+      <div class="node" id="n0" data-tip="Raw prompt or prior tokens.">
+        <span class="badge">Input</span>
+        <div class="title">Prompt (text)</div>
+        <div class="meta">string</div>
+        <div class="outpill">Output: text</div>
+      </div>
+
+      <div class="node" id="n1" data-tip="Subword segmentation to IDs (BPE/Unigram).">
+        <span class="badge">Tokenizer</span>
+        <div class="title">Tokenizer → IDs</div>
+        <div class="meta">[id₁,…,id_T]</div>
+        <div class="outpill">Output: list[int] (T)</div>
+      </div>
+
+      <div class="node" id="n2" data-tip="Look up dense vectors for token IDs; often tied with LM head.">
+        <span class="badge">Embedding</span>
+        <div class="title">Embedding Matrix</div>
+        <div class="meta">E∈ℝ^{V×d}; X=E[ids]</div>
+        <div class="outpill">Output: X ∈ ℝ^{T×d}</div>
+      </div>
+
+      <div class="node" id="n3" data-tip="Inject position info (RoPE/ALiBi).">
+        <span class="badge">Positional</span>
+        <div class="title">Positional Encoding</div>
+        <div class="meta">RoPE / ALiBi</div>
+        <div class="outpill">Output: Xᵖ ∈ ℝ^{T×d}</div>
+      </div>
+
+      <div class="node" id="n4" data-tip="Normalize per token; pre-LN architecture.">
+        <span class="badge ln">LayerNorm</span>
+        <div class="title">LayerNorm</div>
+        <div class="meta">pre-attn</div>
+        <div class="outpill">Output: ℝ^{T×d}</div>
+      </div>
+
+      <div class="node" id="n5" data-tip="Q,K,V projections → scaled dot-product → concat heads → linear.">
+        <span class="badge attn">Attention</span>
+        <div class="title">Multi-Head Self-Attention</div>
+        <div class="meta">H heads, dₖ=d/H</div>
+        <div class="outpill">Output: Attn(X) ∈ ℝ^{T×d}</div>
+      </div>
+
+      <div class="node small" id="n5a" data-tip="Reuse past K/V during decoding.">
+        <span class="badge cache">KV Cache</span>
+        <div class="title">KV Cache</div>
+        <div class="meta">K,V ∈ ℝ^{T×H×dₖ}</div>
+        <div class="outpill">I/O: append/read</div>
+      </div>
+    </div>
+
+    <!-- Row 2: continue under Attention, visually right→left -->
+    <div class="band bottom" id="rowBottom">
+      <div class="node" id="n12" data-tip="Softmax to probabilities; sample next id (greedy/top-p).">
+        <span class="badge">Decode</span>
+        <div class="title">Softmax + Sampling</div>
+        <div class="meta">p ∈ ℝ^{V} → id</div>
+        <div class="outpill">Output: next id ∈ ℕ</div>
+      </div>
+
+      <div class="node" id="n11" data-tip="Linear projection to vocab; often weight-tied with embedding E.">
+        <span class="badge">LM Head</span>
+        <div class="title">LM Head</div>
+        <div class="meta">xWᵀ, W∈ℝ^{V×d}</div>
+        <div class="outpill">Output: logits ∈ ℝ^{V}</div>
+      </div>
+
+      <div class="node" id="n10" data-tip="Normalize before projecting to logits.">
+        <span class="badge ln">LayerNorm</span>
+        <div class="title">Final LayerNorm</div>
+        <div class="meta">pre-LM head</div>
+        <div class="outpill">Output: ℝ^{T×d}</div>
+      </div>
+
+      <div class="node" id="n9" data-tip="Add MoE result to residual stream.">
+        <span class="badge">Residual</span>
+        <div class="title">Residual Add</div>
+        <div class="meta">… + MoE(x)</div>
+        <div class="outpill">Output: ℝ^{T×d}</div>
+      </div>
+
+      <div class="node" id="n8" data-tip="Router picks Top-k experts per token; dispatch; experts run; combine.">
+        <span class="badge moe">MoE</span>
+        <div class="title">MoE Feed-Forward</div>
+        <div class="meta">Top-k, capacity, combine</div>
+        <div class="outpill">Output: MoE(X) ∈ ℝ^{T×d}; G ∈ ℝ^{T×E}</div>
+      </div>
+
+      <div class="node" id="n7" data-tip="Normalize before feed-forward / MoE.">
+        <span class="badge ln">LayerNorm</span>
+        <div class="title">LayerNorm</div>
+        <div class="meta">pre-MoE</div>
+        <div class="outpill">Output: ℝ^{T×d}</div>
+      </div>
+
+      <div class="node" id="n6" data-tip="Add attention result to residual stream.">
+        <span class="badge">Residual</span>
+        <div class="title">Residual Add</div>
+        <div class="meta">x + Attn(x)</div>
+        <div class="outpill">Output: ℝ^{T×d}</div>
+      </div>
+    </div>
+
+    <div class="panels">
+      <div class="panel">
+        <h2>Multi-Head Self-Attention — expanded</h2>
+        <div class="hint">Reference rendering below.</div>
+        <img src="Attention_diagram.png" alt="Self-attention diagram PNG">
+      </div>
+      <div class="panel">
+        <h2>MoE Feed-Forward — vertical path</h2>
+        <div class="hint">Router → Top-k → Capacity/Dispatch → Expert MLP → Combine.</div>
+        <img src="MoE_FF.svg" alt="MoE feed-forward diagram SVG">
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="controls" style="border-top:0"></div>
+
+<div class="tip" id="tip">tip</div>
+
+<script>
+  // Small pointer elements placed at midpoints between nodes.
+  const flow = document.getElementById('flow');
+  const zoom = document.getElementById('zoom');
+  const zv = document.getElementById('zv');
+  const tip = document.getElementById('tip');
+
+  // Tooltip
+  for (const n of document.querySelectorAll('.node')){
+    const t = n.getAttribute('data-tip');
+    if(!t) continue;
+    n.addEventListener('mousemove', e => { tip.textContent = t; tip.style.left = e.clientX+'px'; tip.style.top = e.clientY+'px'; tip.style.opacity = 1; });
+    n.addEventListener('mouseleave', () => tip.style.opacity = 0);
+  }
+
+  function clearPtrs(){ flow.querySelectorAll('.ptr').forEach(p=>p.remove()); }
+
+  function centerOf(el){
+    const r = el.getBoundingClientRect();
+    const f = flow.getBoundingClientRect();
+    return { x: r.left + r.width/2 - f.left, y: r.top + r.height/2 - f.top };
+  }
+
+  function addPtr(fromEl, toEl, cls=''){
+    const a = centerOf(fromEl);
+    const b = centerOf(toEl);
+    const mid = { x:(a.x+b.x)/2, y:(a.y+b.y)/2 };
+    const angle = Math.atan2(b.y-a.y, b.x-a.x) * 180/Math.PI;
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg.setAttribute('class', 'ptr' + (cls?(' '+cls):''));
+    svg.setAttribute('viewBox','0 0 10 10');
+    svg.style.left = mid.x+'px';
+    svg.style.top  = mid.y+'px';
+    svg.style.transform = `translate(-50%,-50%) rotate(${angle}deg)`;
+    const poly = document.createElementNS('http://www.w3.org/2000/svg','polygon');
+    poly.setAttribute('points','2,1 9,5 2,9');
+    svg.appendChild(poly);
+    flow.appendChild(svg);
+  }
+
+  function alignBottomRow(){
+    // align the rightmost bottom node (n6) under Attention (n5)
+    const bottom = document.getElementById('rowBottom');
+    const attn = document.getElementById('n5');
+    const n6 = document.getElementById('n6');
+
+    const a = attn.getBoundingClientRect();
+    const b6 = n6.getBoundingClientRect();
+    const current = parseFloat(getComputedStyle(bottom).marginLeft) || 0;
+    const delta = (a.left - b6.left);
+    bottom.style.marginLeft = (current + delta) + 'px';
+  }
+
+  function draw(){
+    clearPtrs();
+    alignBottomRow();
+
+    const ids = ['n0','n1','n2','n3','n4','n5','n6','n7','n8','n9','n10','n11','n12'];
+    for(let i=0;i<ids.length-1;i++){
+      addPtr(document.getElementById(ids[i]), document.getElementById(ids[i+1]));
+    }
+    // KV cache pointers both ways
+    addPtr(document.getElementById('n5'), document.getElementById('n5a'), 'cache');
+    addPtr(document.getElementById('n5a'), document.getElementById('n5'), 'cache');
+
+    // Decode loop pointers: place two along the long hop
+    addPtr(document.getElementById('n12'), document.getElementById('n1'));
+    // one more near the start of the loop
+    addPtr(document.getElementById('n12'), document.getElementById('n0'));
+  }
+
+  function setZoom(v){
+    flow.style.transform = `scale(${v/100})`;
+    flow.style.transformOrigin = '0 0';
+    zv.textContent = v + '%';
+    requestAnimationFrame(draw);
+  }
+  zoom.addEventListener('input', e => setZoom(parseInt(e.target.value,10)));
+
+  const ro = new ResizeObserver(()=>requestAnimationFrame(draw));
+  ro.observe(flow);
+  window.addEventListener('DOMContentLoaded', ()=>{ setZoom(parseInt(zoom.value,10)); });
+  window.addEventListener('resize', ()=>requestAnimationFrame(draw));
+</script>
+
+</body>
+</html>

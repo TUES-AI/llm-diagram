@@ -1,0 +1,4 @@
+prompt -> tokenizer -> ...... -> attention <-> kv cache
+								   |
+								   v
+decode <- lm head <- ....... <- resudial
