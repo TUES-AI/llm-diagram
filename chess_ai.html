@@ -797,7 +797,7 @@
 					to: {type: "string", pattern: "^[a-h][1-8]$"},
 					from: {type: "string", pattern: "^[a-h][1-8]$"}
 				},
-				required: ["to"]
+				required: ["to", "from"]
 			},
 			strict: true
 		};
@@ -825,6 +825,79 @@
 			return best;
 		}
 
+		const SQUARES = (() => {
+			const f = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+			const r = ['1', '2', '3', '4', '5', '6', '7', '8'];
+			const out = [];
+			for (const ff of f) for (const rr of r) out.push(ff + rr);
+			return out;
+		})();
+
+		/* Build per-move JSON Schema.
+		   - 'to' must be any board square (enum of 64)
+		   - 'from' if present must be one of mover's squares for that color
+		*/
+		function buildMoveJsonSchema(allowedFromSquares) {
+			return {
+				name: "move_choice",
+				schema: {
+					type: "object",
+					additionalProperties: false,
+					properties: {
+						to: {type: "string", enum: SQUARES},
+						from: {type: "string", enum: allowedFromSquares}
+					},
+					required: ["to", "from"]
+				},
+				strict: true
+			};
+		}
+
+		function boardJSON() {
+			return {
+				flipped: state.flipped,
+				moveCount: state.moveCount,
+				pieces: state.pieces.map(p => ({type: p.type, color: p.color, sq: p.sq}))
+			};
+		}
+
+		function findNearestMover(color, targetSq) {
+			const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+			const tx = files.indexOf(targetSq[0]);
+			const ty = parseInt(targetSq[1], 10) - 1;
+			const list = state.pieces.filter(p => p.color === color);
+			if (!list.length) return null;
+			let best = list[0], bestDist = 999;
+			for (const p of list) {
+				const fx = files.indexOf(p.sq[0]);
+				const fy = parseInt(p.sq[1], 10) - 1;
+				const d = Math.hypot(fx - tx, fy - ty);
+				if (d < bestDist) {best = p; bestDist = d;}
+			}
+			return best;
+		}
+
+		/* Robust extractor for Responses API structured output */
+		function extractStructuredJSON(resp) {
+			try {
+				const content = resp?.output?.[0]?.content;
+				if (Array.isArray(content)) {
+					const j = content.find(x => x?.type === 'output_json');
+					if (j && (j.output_json || j.json)) return j.output_json || j.json;
+					const t = content.map(x => x?.text).filter(Boolean).join('').trim();
+					if (t) return JSON.parse(t);
+				}
+			} catch { }
+			try {if (typeof resp?.output_text === 'string') return JSON.parse(resp.output_text.trim());} catch { }
+			try { // last resort
+				const s = JSON.stringify(resp);
+				const m = s.match(/\{(?:[^{}]|{[^{}]*})*}/);
+				if (m) return JSON.parse(m[0]);
+			} catch { }
+			return null;
+		}
+
+		/* ================= REWRITTEN FUNCTION ================= */
 		async function callLLMMove(who) {
 			const color = who; // 'white' or 'black'
 			const apiKey = elApiKey.value.trim();
@@ -832,110 +905,87 @@
 			const model = (who === 'white' ? elWhiteModel.value.trim() : elBlackModel.value.trim()) || 'gpt-4.1-mini';
 
 			if (!apiKey) {toast('Missing API key'); throw new Error('No API key');}
+
 			const btn = who === 'white' ? btnWhite : btnBlack;
 			btn.disabled = true; btn.textContent = 'Thinking…';
+
+			// Allowed 'from' squares for this side
+			const allowedFrom = state.pieces.filter(p => p.color === color).map(p => p.sq);
+			const JSON_SCHEMA = buildMoveJsonSchema(allowedFrom);
+
+			// const sys = `You select one chess move for your side. Output must be JSON that exactly matches the provided schema. No prose, no code fences.`;
+			const sys = `You are a player in a chess game. Given the board you must choose a position to move a piece and the position of the piece to move from. 
+
+You can't cheat or else you will lose the game.`;
+			const usr =
+				`You are ${color.toUpperCase()}.
+
+Board:
+${JSON.stringify(boardJSON(), null, 2)}`;
 
 			const payload = {
 				model,
 				input: [
-					{
-						role: "system",
-						content: [
-							{
-								type: "text", text:
-									`You control exactly one side of a chessboard simulation.
-There are NO RULES enforced by the UI. Any piece may move to any square.
-Capturing is allowed on both colors, including your own.
-Respond ONLY with JSON that satisfies the provided JSON Schema. No prose.` }
-						]
-					},
-					{
-						role: "user",
-						content: [
-							{
-								type: "text", text:
-									`You are **${color.toUpperCase()}**. Choose a destination square 'to' for any one of your pieces.
-Optionally also include 'from' if you want a specific piece to move.
-
-Return JSON like:
-{"to":"e4"}   // UI will pick the nearest ${color} piece and move it to e4
-or
-{"from":"a2","to":"a4"} // explicitly pick a piece
-
-Board (JSON):
-${JSON.stringify(boardJSON(), null, 2)}`
-							}
-						]
-					}
+					{role: "system", content: [{type: "input_text", text: sys}]},
+					{role: "user", content: [{type: "input_text", text: usr}]}
 				],
-				response_format: {type: "json_schema", json_schema: JSON_SCHEMA}
+				text: {
+					format: {
+						type: "json_schema",
+						name: JSON_SCHEMA.name,
+						schema: JSON_SCHEMA.schema,
+						strict: JSON_SCHEMA.strict
+					}
+				}
 			};
+
+			const controller = new AbortController();
+			const timeout = setTimeout(() => controller.abort(), 18000);
 
 			try {
 				const res = await fetch(url, {
 					method: 'POST',
 					headers: {
 						'Authorization': 'Bearer ' + apiKey,
-						'Content-Type': 'application/json'
+						'Content-Type': 'application/json',
+						'Accept': 'application/json'
 					},
-					body: JSON.stringify(payload)
+					body: JSON.stringify(payload),
+					signal: controller.signal
 				});
+
+				if (!res.ok) {
+					let detail = '';
+					try {detail = (await res.json())?.error?.message || res.statusText;} catch { }
+					throw new Error(`HTTP ${res.status} ${detail}`.trim());
+				}
+
 				const data = await res.json();
-				const move = extractMove(data);
-				if (!move || !/^[a-h][1-8]$/.test(move.to)) {
-					throw new Error('Invalid move JSON');
-				}
+				const move = extractStructuredJSON(data);
+
+				if (!move || typeof move !== 'object') throw new Error('No structured JSON in response');
+				if (!SQUARES.includes(move.to)) throw new Error('Invalid "to" square');
+				if (move.from && !allowedFrom.includes(move.from)) delete move.from; // ignore bad 'from'
+
+				// Pick mover
 				let mover = null;
-				if (move.from && /^[a-h][1-8]$/.test(move.from)) {
-					const p = state.pieces.find(x => x.sq === move.from && x.color === color);
-					mover = p || findNearestMover(color, move.to);
-				} else {
-					mover = findNearestMover(color, move.to);
+				if (move.from) {
+					mover = state.pieces.find(x => x.sq === move.from && x.color === color) || null;
 				}
-				if (!mover) {toast('No piece available', false); return;}
+				if (!mover) mover = findNearestMover(color, move.to);
+
+				if (!mover) {toast('No piece available'); return;}
 				movePiece(mover.id, move.to);
 				state.moveCount++;
 				toast(`${color} → ${move.to}`, true);
+
 			} catch (err) {
 				console.error(err);
 				toast('LLM move failed');
 			} finally {
+				clearTimeout(timeout);
 				btn.disabled = false; btn.textContent = who === 'white' ? 'Play ▸ White' : 'Play ▸ Black';
 			}
-		}
-
-		/* Attempts to parse structured output from multiple response shapes */
-		function extractMove(data) {
-			// 1) Responses API, structured output as output_json
-			try {
-				const c = data?.output?.[0]?.content;
-				if (Array.isArray(c)) {
-					const jsonBlock = c.find(x => x.type === 'output_json' && (x.output_json || x.json));
-					if (jsonBlock) {return jsonBlock.output_json || jsonBlock.json;}
-					const textBits = c.map(x => x.text).filter(Boolean).join('').trim();
-					if (textBits) return JSON.parse(textBits);
-				}
-			} catch { }
-			// 2) Responses API condensed text
-			try {
-				if (typeof data?.output_text === 'string') {
-					return JSON.parse(data.output_text.trim());
-				}
-			} catch { }
-			// 3) Chat Completions fallback
-			try {
-				const t = data?.choices?.[0]?.message?.content;
-				if (typeof t === 'string') {
-					return JSON.parse(t.trim());
-				}
-			} catch { }
-			// 4) Last resort: find first {...}
-			try {
-				const s = JSON.stringify(data);
-				const m = s.match(/\{(?:[^{}]|{[^{}]*})*}/);
-				if (m) return JSON.parse(m[0]);
-			} catch { }
-			return null;
 		}
 
 		/* Bind buttons */
