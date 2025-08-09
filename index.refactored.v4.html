@@ -22,9 +22,9 @@
     border-radius:999px;background:var(--pill);color:var(--text)}
   .sw{width:12px;height:12px;border-radius:2px;display:inline-block}
   /* Flow viewport */
-  .wrap{position:relative;border-top:1px solid var(--line);background:var(--panel)}
+  .wrap{position:relative;border-top:1px solid var(--line);background:var(--panel);overflow-x:auto;overflow-y:hidden}
   .flow{
-    position:relative;min-width:1000px;padding:32px 40px 80px;
+    position:relative;min-width:1000px;width:max-content;display:inline-block;padding:32px 40px 80px;
     background:
       linear-gradient(90deg,var(--grid) 1px,transparent 1px) 0 0/40px 40px,
       linear-gradient(var(--grid) 1px,transparent 1px) 0 0/40px 40px;
@@ -45,17 +45,18 @@
   /* Panels */
   .band, .panels{position:relative; z-index:1}
   .flow .panels{margin-top:24px}
-  .panel img{width:100%; height:auto; display:block; border:1px solid var(--line); border-radius:8px}
-  .panels{display:grid;grid-template-columns:1fr 1fr;gap:0;border-top:1px solid var(--line)}
+  .panel img{width:100%; max-width:100%; height:auto; display:block; border:1px solid var(--line); border-radius:8px}
+  .panel svg{width:100%; max-width:100%; height:auto; display:block; border:1px solid var(--line); border-radius:8px}
+  .panels{display:grid;grid-template-columns:1fr 1fr;gap:0;border-top:1px solid var(--line);width:100%;max-width:1200px;margin:0 auto}
   .panel{background:#fff;border-right:1px solid var(--line)}
   .panel:last-child{border-right:0}
   .panel h2{margin:10px 16px 0;font-size:14px;color:#0369a1}
   .panel .hint{margin:4px 16px 8px;color:var(--muted);font-size:12px}
   .panel svg{width:100%;height:210px;display:block}
   /* Pointer arrows */
-  .ptr{position:absolute;width:16px;height:16px;left:0;top:0;transform:translate(-50%,-50%);z-index:2;filter:drop-shadow(0 1px 0 rgba(255,255,255,.9))}
-  .ptr polygon{fill:var(--flow);stroke:#ffffff;stroke-width:1}
-  .ptr.cache polygon{fill:var(--cache)}
+  .ptr{position:absolute;left:0;top:0;transform:translate(-50%,-50%);z-index:2;filter:drop-shadow(0 2px 3px rgba(0,0,0,.1))}
+  .ptr path{fill:var(--flow);stroke:var(--flow);stroke-width:1.5;stroke-linejoin:round;stroke-linecap:round}
+  .ptr.cache path{fill:var(--cache);stroke:var(--cache)}
   /* Tooltips */
   .tip{position:fixed;pointer-events:none;z-index:10;background:#111827;color:#e5e7eb;padding:8px 10px;font-size:12px;border:1px solid #1f2937;border-radius:6px;
     box-shadow:0 10px 20px rgba(0,0,0,.25);opacity:0;transform:translate(-50%,-140%);transition:opacity .06s ease;white-space:nowrap}
@@ -236,18 +237,62 @@
   function addPtr(fromEl, toEl, cls=''){
     const a = centerOf(fromEl);
     const b = centerOf(toEl);
-    const mid = { x:(a.x+b.x)/2, y:(a.y+b.y)/2 };
-    const angle = Math.atan2(b.y-a.y, b.x-a.x) * 180/Math.PI;
+    
+    // Calculate distance between elements
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const distance = Math.sqrt(dx*dx + dy*dy);
+
+    const isCache = (cls && cls.indexOf('cache') !== -1);
+    
+    // Placement: cache arrows are centered; others are biased toward source
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const arrowPos = isCache ? mid : { x: a.x + dx * 0.4, y: a.y + dy * 0.4 };
+    
+    const angle = Math.atan2(dy, dx) * 180/Math.PI;
+
+    // Size: cache arrows a bit shorter; others scale as before
+    const arrowLength = isCache
+      ? Math.min(Math.max(distance * 0.5, 60), 120)
+      : Math.min(Math.max(distance * 0.6, 60), 120);
+    const viewBoxWidth = arrowLength;
 
     const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
     svg.setAttribute('class', 'ptr' + (cls?(' '+cls):''));
-    svg.setAttribute('viewBox','0 0 10 10');
-    svg.style.left = mid.x+'px';
-    svg.style.top  = mid.y+'px';
+    svg.setAttribute('viewBox',`0 0 ${viewBoxWidth} 20`);
+    svg.style.width = arrowLength + 'px';
+    svg.style.height = '20px';
+    svg.style.left = arrowPos.x+'px';
+    svg.style.top  = arrowPos.y+'px';
     svg.style.transform = `translate(-50%,-50%) rotate(${angle}deg)`;
-    const poly = document.createElementNS('http://www.w3.org/2000/svg','polygon');
-    poly.setAttribute('points','2,1 9,5 2,9');
-    svg.appendChild(poly);
+    
+    const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+    
+    if (isCache) {
+      // Double-headed arrow: <--->
+      const leftHeadStart = 20;
+      const leftHeadEnd = 5;
+      const rightHeadStart = viewBoxWidth - 20;
+      const rightHeadEnd = viewBoxWidth - 5;
+      // Stem + right head + left head
+      const d = [
+        // stem
+        `M ${leftHeadStart},10 L ${rightHeadStart},10`,
+        // right head (points right)
+        `M ${rightHeadStart},5 L ${rightHeadEnd},10 L ${rightHeadStart},15 Z`,
+        // left head (points left)
+        `M ${leftHeadStart},5 L ${leftHeadEnd},10 L ${leftHeadStart},15 Z`
+      ].join(' ');
+      path.setAttribute('d', d);
+    } else {
+      // Single-headed arrow with clear tail
+      const tailStart = 5;
+      const headStart = viewBoxWidth - 20;
+      const headEnd = viewBoxWidth - 5;
+      path.setAttribute('d',`M ${tailStart},10 L ${headStart},10 L ${headStart},5 L ${headEnd},10 L ${headStart},15 L ${headStart},10`);
+    }
+    
+    svg.appendChild(path);
     flow.appendChild(svg);
   }
 
@@ -277,9 +322,8 @@
     for(let i=0;i<ids.length-1;i++){
       addPtr(document.getElementById(ids[i]), document.getElementById(ids[i+1]));
     }
-    // KV cache pointers both ways
+    // KV cache pointer (double-headed)
     addPtr(document.getElementById('n5'), document.getElementById('n5a'), 'cache');
-    addPtr(document.getElementById('n5a'), document.getElementById('n5'), 'cache');
 
     // Decode loop pointers
     // addPtr(document.getElementById('n12'), document.getElementById('n1'));
